@@ -55,21 +55,43 @@ import datetime as dt
 from dateutil import rrule
 from datetime import datetime, timedelta
 import requests
+from bs4 import BeautifulSoup
 
 
 #     s = requests.Session()
 #     s.get('http://trafficserver.transmetric.com/gdot-prod/tcdb.jsp?siteid=135-6287#')
 #     s.id = 43946
 
-# In[10]:
+# In[12]:
 
 def gen_session(siteid_sess, siteid_url):
-    s = requests.Session()
-    s.get('http://trafficserver.transmetric.com/gdot-prod/tcdb.jsp?siteid={}#'.format(siteid_sess))
+    s, url = gen_session_(siteid_sess)
     s.id = siteid_url
-    dirname = gen_name('', '', siteid_url, dironly=1)
+    s.loc_id = siteid_sess
+    dirname = gen_name('', '', siteid_sess, dironly=1)
     mkdirs(dirname)
-    return s
+    descfile = join(dirname, 'description.txt')
+    if not exists(descfile):
+        html = requests.get(url).content
+        txt = get_desc(html)
+        print('Writing {}'.format(descfile))
+        with open(descfile, 'wb') as f:
+            f.write(txt)
+    return s 
+
+
+def gen_session_(siteid_sess):
+    s = requests.Session()
+    url = 'http://trafficserver.transmetric.com/gdot-prod/tcdb.jsp?siteid={}#'.format(siteid_sess)
+    s.get(url)
+    return s, url
+
+
+def get_desc(html):
+    tdstyle = {u'style': u'text-align: left; width: 100%; padding-left: 6px; padding-top: 0px;'}
+    soup = BeautifulSoup(html, 'html.parser')
+    td = soup.table.tr.findChild(attrs=tdstyle)
+    return td.text
 
 def xls_getter(year, month, siteid=None, session=requests):
     u = ("http://trafficserver.transmetric.com/gdot-prod/exportexec.jsp"
@@ -91,32 +113,23 @@ def mkdirs(path):
         if exc.errno != errno.EEXIST or not os.path.isdir(path):
             raise
 
-def gen_name(year, month, siteid=None, dironly=False):
-    dir = join('data', str(siteid))
+def gen_name(year, month, loc_id=None, dironly=False):
+    dir = join('data', str(loc_id))
     if dironly:
         return dir
     return join(dir, '{}_{}.xlsx'.format(year, month))
 
 
-# In[9]:
-
-gen_name('','', 43946, dironly=1)
-
-
-# gen_name(2012, 1, siteid=465)
-
-# In[6]:
-
-def fetch(year, month, siteid=None, session=requests, cache=True):
-    siteid = siteid or session.id
-    fn = gen_name(year, month, siteid=siteid)
-    mkdirs(dirname(fn))
+def fetch(year, month, loc_id=None, session=requests, cache=True):
+    loc_id = loc_id or session.loc_id
+    fn = gen_name(year, month, loc_id=loc_id)
+    #mkdirs(dirname(fn))
     
     if cache and exists(fn):
         print('File pulled. Skipping.')
         return fn
     
-    r = xls_getter(year, month, siteid=siteid, session=session)
+    r = xls_getter(year, month, siteid=session.id, session=session)
     to_excel(r, fn)
     return fn
 
@@ -134,16 +147,15 @@ def fetchall(startdate, until, s):
     return fns
 
 
-# fetch(2014, 6, session=s)
+# In[10]:
 
-# In[4]:
+ss = gen_session('135-6287', 43946)
+# ss = gen_session('http://trafficserver.transmetric.com/gdot-prod/tcdb.jsp?siteid=135-6287#', 43946)
 
 
+# In[13]:
 
-
-# In[5]:
-
-ss = gen_session('http://trafficserver.transmetric.com/gdot-prod/tcdb.jsp?siteid=135-6287#', 43946)
+fns = fetchall(dt.date(2012, 1, 1), dt.date(2015, 8, 1), ss)
 
 
 # In[44]:
@@ -158,11 +170,6 @@ for d in rrule.rrule(rrule.MONTHLY, dtstart=d1, until=d2):
 # In[57]:
 
 
-
-
-# In[10]:
-
-fns = fetchall(dt.date(2012, 1, 1), dt.date(2015, 8, 1), ss)
 
 
 # In[ ]:
