@@ -1,45 +1,6 @@
 
 # coding: utf-8
 
-# In[ ]:
-
-from __future__ import print_function, division
-
-# import arrow
-from dateutil.relativedelta import relativedelta
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
-import pandas as pd
-from pandas import DataFrame, Series
-import pandas.util.testing as tm
-from pandas.util.testing import assert_frame_equal
-import pypyodbc as odbc
-import redis
-import toolz.curried as z
-xx = list
-
-from ast import literal_eval
-from collections import OrderedDict
-import csv
-import datetime as dt
-from decimal import Decimal
-from functools import partial as part
-import hashlib
-import itertools as it
-from itertools import starmap, repeat, count
-from operator import itemgetter as itg, methodcaller as mc, attrgetter as prop
-import os
-import re
-import sys
-import time
-
-import myutils as mu
-import pandas_utils as pu
-import vutils as vu
-pu.psettings(pd, lw=150)
-
-
 # In[1]:
 
 get_ipython().run_cell_magic(u'javascript', u'', u"IPython.keyboard_manager.command_shortcuts.add_shortcut('Ctrl-k','ipython.move-selected-cell-up')\nIPython.keyboard_manager.command_shortcuts.add_shortcut('Ctrl-j','ipython.move-selected-cell-down')\nIPython.keyboard_manager.command_shortcuts.add_shortcut('Shift-m','ipython.merge-selected-cell-with-cell-after')")
@@ -47,13 +8,17 @@ get_ipython().run_cell_magic(u'javascript', u'', u"IPython.keyboard_manager.comm
 
 # In[2]:
 
+from __future__ import print_function, division
 from os.path import join, exists, dirname
 import os
+import re
 import errno
 from functools import partial
 import datetime as dt
 from dateutil import rrule
 from datetime import datetime, timedelta
+from collections import Counter
+
 import requests
 from bs4 import BeautifulSoup
 
@@ -62,23 +27,22 @@ from bs4 import BeautifulSoup
 #     s.get('http://trafficserver.transmetric.com/gdot-prod/tcdb.jsp?siteid=135-6287#')
 #     s.id = 43946
 
-# In[12]:
+# In[8]:
 
-def gen_session(siteid_sess, siteid_url):
+def gen_session(siteid_sess):
     s, url = gen_session_(siteid_sess)
-    s.id = siteid_url
+    html = requests.get(url).content
+    s.id = get_siteid(html)
     s.loc_id = siteid_sess
     dirname = gen_name('', '', siteid_sess, dironly=1)
     mkdirs(dirname)
     descfile = join(dirname, 'description.txt')
     if not exists(descfile):
-        html = requests.get(url).content
         txt = get_desc(html)
         print('Writing {}'.format(descfile))
         with open(descfile, 'wb') as f:
             f.write(txt)
     return s 
-
 
 def gen_session_(siteid_sess):
     s = requests.Session()
@@ -146,68 +110,21 @@ def fetchall(startdate, until, s):
             raise(e)
     return fns
 
+def get_siteid(html):
+    siteid_pat = re.compile(r"doShowRawMonth\('(\d+)', \d+, \d+\);")
+    ctr = Counter(siteid_pat.findall(html))
+    return sorted(ctr.items(), key=lambda x: -x[1])[0][0]
 
-# In[10]:
 
-ss = gen_session('135-6287', 43946)
+# In[6]:
+
+# ss = gen_session('135-6287', 43946)
 # ss = gen_session('http://trafficserver.transmetric.com/gdot-prod/tcdb.jsp?siteid=135-6287#', 43946)
+# rr = gen_session('121-0124') 
+s400 = gen_session('121-5450') 
 
 
-# In[13]:
+# In[7]:
 
-fns = fetchall(dt.date(2012, 1, 1), dt.date(2015, 8, 1), ss)
-
-
-# In[44]:
-
-d1 = dt.date(2014, 2, 1)
-d2 = dt.date(2015, 5, 1)
-
-for d in rrule.rrule(rrule.MONTHLY, dtstart=d1, until=d2):
-    print(d.year, d.month)
-
-
-# In[57]:
-
-
-
-
-# In[ ]:
-
-to_excel(r, '{}_{}_{}.xlsx'.format(43946, 2014, 6))
-
-
-# In[34]:
-
-get_ipython().system(u"open 'data/'")
-
-
-# In[ ]:
-
-get_ipython().system(u"open 'data/43946_2014_6.xlsx'")
-
-
-# In[ ]:
-
-to_excel(r, )
-
-
-# In[ ]:
-
-r.reason
-
-
-# In[ ]:
-
-r.request.
-
-
-# In[ ]:
-
-
-
-
-# In[ ]:
-
-
+fns = fetchall(dt.date(2012, 1, 1), dt.date(2015, 8, 1), s400)
 
