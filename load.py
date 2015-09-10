@@ -1,33 +1,43 @@
 
 # coding: utf-8
 
-# In[1]:
+# In[ ]:
 
 get_ipython().run_cell_magic(u'javascript', u'', u"IPython.keyboard_manager.command_shortcuts.add_shortcut('Ctrl-k','ipython.move-selected-cell-up')\nIPython.keyboard_manager.command_shortcuts.add_shortcut('Ctrl-j','ipython.move-selected-cell-down')\nIPython.keyboard_manager.command_shortcuts.add_shortcut('Shift-m','ipython.merge-selected-cell-with-cell-after')")
 
 
-# In[2]:
+# In[ ]:
 
 from __future__ import print_function, division
-from os.path import join, exists, dirname
+from os.path import join, exists, dirname, basename
 import os
 import re
 import errno
 from functools import partial
 import datetime as dt
-from dateutil import rrule
 from datetime import datetime, timedelta
+import calendar
 from collections import Counter
+from glob import glob
+import itertools as it
 
 import requests
 from bs4 import BeautifulSoup
+from dateutil import rrule, relativedelta
+from dateutil.relativedelta import relativedelta 
+
+import pandas as pd
+import toolz.curried as z
+
+pd.options.display.notebook_repr_html = False
+pd.options.display.width = 130
 
 
 #     s = requests.Session()
 #     s.get('http://trafficserver.transmetric.com/gdot-prod/tcdb.jsp?siteid=135-6287#')
 #     s.id = 43946
 
-# In[8]:
+# In[ ]:
 
 def gen_session(siteid_sess):
     s, url = gen_session_(siteid_sess)
@@ -116,7 +126,7 @@ def get_siteid(html):
     return sorted(ctr.items(), key=lambda x: -x[1])[0][0]
 
 
-# In[6]:
+# In[ ]:
 
 # ss = gen_session('135-6287', 43946)
 # ss = gen_session('http://trafficserver.transmetric.com/gdot-prod/tcdb.jsp?siteid=135-6287#', 43946)
@@ -124,7 +134,80 @@ def get_siteid(html):
 s400 = gen_session('121-5450') 
 
 
-# In[7]:
+# In[ ]:
 
 fns = fetchall(dt.date(2012, 1, 1), dt.date(2015, 8, 1), s400)
+
+
+# ## Read Excel files 
+
+# In[ ]:
+
+p = print
+
+
+# In[ ]:
+
+def cols2hrs24(df):
+    "Convert columns from `12:00 am,  1:00 am, ...11:00 pm` to `0, 1, ...23`"
+    hrs = z.pipe(range(1, 13), it.cycle, z.drop(11), z.take(12), list)
+    hrs24 = ['{}:00 {}'.format(hr, half) for half in ('am', 'pm') for hr in hrs]
+    assert all(df.columns[2:] == hrs24), "Expecting columns of form `12:00 am,  1:00 am, ...11:00 pm`"
+    return df.rename(columns=dict(zip(hrs24, map(str, range(24)))))
+
+
+def read_excel(fname, sheetname=0):
+    # URL scheme subtracted a month from actual contents; correct this
+    pat = re.compile(r'(\d{4})_(\d{1,2})\.xlsx')
+#     /p fname
+#     p(basename(fname))
+    [(year_, month_)] = pat.findall(basename(fname))
+    prevmonth = dt.date(int(year_), int(month_), 1)
+    thismonth = prevmonth + relativedelta(months=1)
+    (year, month) = thismonth.timetuple()[:2]
+    
+    df = pd.read_excel(fname, header=7, sheetname=sheetname)
+    df = df.rename(columns={'Unnamed: 0': 'Date', 'Unnamed: 1': 'Day_of_week'})
+    
+    # Drop aggregate rows/cols
+    date_rows = df.Date.str[-1].str.isdigit()
+    dregs = df.Date[~date_rows]
+    assert (dregs == 'Average Weekday Weekend'.split()).all()
+    assert (dregs == df.Date[-3:]).all()
+    del df['Total']
+        
+    # Parse and check days
+    df = df[date_rows].copy()
+    df['Date'] = pd.to_datetime(str(year) + ' ' +  df['Date'].map(str))
+    assert all(df.Date == pd.Series(get_days(year, month))), "Unexpected date rows"
+    
+    return cols2hrs24(df)  # , year, month
+
+
+get_days = lambda year, month: [dt.datetime(year, month, day) for day in range(1, calendar.monthrange(year, month)[1] + 1)]
+# df, year, month = read_excel('data/121-5450/2012_1.xlsx', 2)
+df = read_excel('data/121-5450/2012_1.xlsx', 2)
+# year, month
+
+
+# In[ ]:
+
+def collect_dfs(site_loc, sheet=0, verbose=1):
+    dr = 'data/{}/*.xlsx'.format(site_loc)
+    all_dfs = []
+
+    for fname in glob(dr):
+        if verbose:
+            print(fname)
+        all_dfs.append(read_excel(fname, sheetname=sheet))
+    df = pd.concat(all_dfs).reset_index(drop=1)
+    
+    dir = dirname(dr)
+    outname = join(dir, 'all_{}.msg'.format(sheet))
+    df.to_msgpack(outname)
+    return df
+
+# site_df0 = collect_dfs('089-3572', sheet=0, verbose=0)
+# site_df1 = collect_dfs('089-3572', sheet=1, verbose=0)
+# site_df2 = collect_dfs('089-3572', sheet=2, verbose=0)
 

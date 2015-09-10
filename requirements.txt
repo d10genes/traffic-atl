@@ -2,3 +2,7 @@ ipython[notebook]
 requests
 python-dateutil
 beautifulsoup4
+pandas
+seaborn
+openpyxl
+toolz
