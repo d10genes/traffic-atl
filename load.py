@@ -20,6 +20,7 @@ import calendar
 from collections import Counter
 from glob import glob
 import itertools as it
+from operator import attrgetter as prop
 
 import requests
 from bs4 import BeautifulSoup
@@ -128,15 +129,17 @@ def get_siteid(html):
 
 # In[ ]:
 
-# ss = gen_session('135-6287', 43946)
+ss = gen_session('135-6287')
 # ss = gen_session('http://trafficserver.transmetric.com/gdot-prod/tcdb.jsp?siteid=135-6287#', 43946)
-# rr = gen_session('121-0124') 
-s400 = gen_session('121-5450') 
+# rr = gen_session('121-0124')  # empty
+# s400 = gen_session('121-5450')
+# rritp = gen_session('121-5114') # big gaps
+# rr = gen_session('121-0124')
 
 
 # In[ ]:
 
-fns = fetchall(dt.date(2012, 1, 1), dt.date(2015, 8, 1), s400)
+fns = fetchall(dt.date(2011, 12, 1), dt.date(2015, 9, 1), ss)
 
 
 # ## Read Excel files 
@@ -178,10 +181,21 @@ def read_excel(fname, sheetname=0):
         
     # Parse and check days
     df = df[date_rows].copy()
-    df['Date'] = pd.to_datetime(str(year) + ' ' +  df['Date'].map(str))
+    df['Date'] = pd.to_datetime(str(year) + ' ' + df['Date'].map(str))
+    
+    if not all(df.Date == pd.Series(get_days(year, month))):
+        p(df.Date)
+        p(pd.Series(get_days(year, month)))
     assert all(df.Date == pd.Series(get_days(year, month))), "Unexpected date rows"
     
-    return cols2hrs24(df)  # , year, month
+    df = cols2hrs24(df) 
+    df['Day_of_year'] = df.Date.map(prop('dayofyear'))
+    df['Week_of_year'] = df.Date.map(prop('weekofyear'))
+    df['Year'] = df.Date.map(prop('year'))
+    df['Weekday'] = ~df.Day_of_week.isin(['Sat', 'Sun'])
+    df['Month'] = df.Date.map(prop('month'))
+    
+    return df # , year, month
 
 
 get_days = lambda year, month: [dt.datetime(year, month, day) for day in range(1, calendar.monthrange(year, month)[1] + 1)]
@@ -193,6 +207,8 @@ df = read_excel('data/121-5450/2012_1.xlsx', 2)
 # In[ ]:
 
 def collect_dfs(site_loc, sheet=0, verbose=1):
+    if hasattr(sheet, '__iter__'):
+        return [collect_dfs(site_loc, sheet=s, verbose=verbose) for s in sheet]
     dr = 'data/{}/*.xlsx'.format(site_loc)
     all_dfs = []
 
@@ -200,14 +216,26 @@ def collect_dfs(site_loc, sheet=0, verbose=1):
         if verbose:
             print(fname)
         all_dfs.append(read_excel(fname, sheetname=sheet))
-    df = pd.concat(all_dfs).reset_index(drop=1)
+    df = pd.concat(all_dfs).sort('Date').reset_index(drop=1)
     
+    are, shouldbe = zip(*zip(df.Day_of_week, it.cycle(df.Day_of_week[:7])))
+    same = pd.Series(are) == pd.Series(shouldbe)
+    assert all(same), "Days of week expected to cycle uninterrupted"
+
     dir = dirname(dr)
     outname = join(dir, 'all_{}.msg'.format(sheet))
     df.to_msgpack(outname)
     return df
 
+# site_dfs = collect_dfs('135-6287', sheet=[0, 1, 2], verbose=0)
+# site_dfs = collect_dfs('121-5450', sheet=[0, 1, 2], verbose=0)
+site_dfs = collect_dfs('121-5114', sheet=[0, 1, 2], verbose=0)
 # site_df0 = collect_dfs('089-3572', sheet=0, verbose=0)
 # site_df1 = collect_dfs('089-3572', sheet=1, verbose=0)
 # site_df2 = collect_dfs('089-3572', sheet=2, verbose=0)
+
+
+# In[ ]:
+
+get_ipython().system(u'open data/135-6287/2014_6.xlsx')
 
