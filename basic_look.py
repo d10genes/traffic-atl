@@ -20,6 +20,7 @@ from dateutil import rrule
 from datetime import datetime, timedelta
 import calendar
 from collections import Counter
+from itertools import count
 from operator import methodcaller as mc
 
 import pandas as pd
@@ -30,6 +31,7 @@ import matplotlib as mpl
 import seaborn as sns
 # import requests
 # from bs4 import BeautifulSoup
+import toolz.curried as z
 import xlrd
 
 
@@ -85,7 +87,8 @@ def plot_minor():
 
 # In[ ]:
 
-dow = [u'Mon', u'Tue', u'Wed', u'Thu', u'Fri']
+dow = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
+adow = dow + ['Sat', 'Sun']
 hrs = map(str, range(24))
 
 
@@ -106,21 +109,15 @@ smg.T.plot(figsize=(20, 10), linewidth=4, #fontsize=20,
 
 
 # ### Peak hour
-# I was curious to see whether the peak traffic hour evolves over the year, but sampling the first 5 weekdays in March, June and October indicate that it peaks somewhat consistently at pm throughout the year.
-
-#     def plot_peak(df, **kw):
-#         df[just_nums(df)].T.plot(figsize=(10, 5), **kw)
+# I was curious to see whether the peak traffic hour evolves over the year, but sampling the first 5 weekdays in March, June and October indicate that it peaks somewhat consistently on the evening throughout the year at 8am, noon and 5pm.
 
 # In[ ]:
 
-dfpeak = dfnor.query('Weekday & Year == 2014 & Month == [3, 6, 10]').set_index('Date').copy()
+dfwkday = dfnor.query('Weekday').set_index('Date').copy()
+dfpeak = dfwkday.query('Year == 2014 & Month == [3, 6, 10]').copy()
 dfpeak['Mday'] = dfpeak.Month.map(str) + dfpeak.Day_of_week
 dfpeak = dfpeak.drop_duplicates('Mday')
 
-
-# dim = 1, 3
-# 
-# [(i, j) for i in range(1, 1 + dim[0]) for j in range(1, 1 + dim[1])]
 
 # In[ ]:
 
@@ -139,10 +136,10 @@ def plot_days(i, month, dfgb, n, nrows=1, ncols=1, hrs=hrs):
     plt.legend(list(dfplt_), loc='best')
 
 plt.figure(figsize=(20, 5))
-plotby(dfpeak, by='Month', f=partial(plot_days, hrs=hrs[10:20]), nrows=1, ncols=3);
+plotby(dfpeak, by='Month', f=partial(plot_days, hrs=hrs[5:20]), nrows=1, ncols=3);
 
 
-# I did note, though, 
+# And, perhaps not surprisingly, there appears to be a lot less variation from 1-4pm
 
 # In[ ]:
 
@@ -150,22 +147,61 @@ dfpeak[hrs].T.plot(figsize=(20, 5))
 plot_minor()
 
 
-# ## Cluster 
+# Looking at how the peak hours change throughout the year produced a lot of spiky behavior, which taking the moving average helped with:
 
 # In[ ]:
 
-from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import DBSCAN, SpectralClustering, KMeans, spectral_clustering, AgglomerativeClustering
-from sklearn.manifold import TSNE
+plt.figure(figsize=(20, 6))
+plot_peak_smoothed = lambda x: pd.rolling_mean(x, 5).plot()
+get_peak = lambda x: x.T.idxmax().dropna().map(int)
+
+am = get_peak(dfwkday[['6', '7', '8', '9', '10']])
+lunch = get_peak(dfwkday[['10', '11', '12', '13', '14']])
+pm = get_peak(dfwkday[['14', '15', '16', '17', '18', '19']])
+
+plot_peak_smoothed(am)
+plot_peak_smoothed(lunch)
+plot_peak_smoothed(pm)
+
+year_line = lambda yr: plt.plot([dt.date(yr, 1, 1), dt.date(yr, 1, 1)], [8, 18], '-.', linewidth=.7, c=(0,0,0))
+map(year_line, [2013, 2014, 2015])
+
+rotate(75)
+plt.xlim()
+plot_minor()
 
 
-#     import toolz.curried as z
-#     import itertools as it
+# The intuition that peak hour doesn't vary much looks largely correct. They look pretty constant throughout the year, though there appears to be a discernible dip in the peak afternoon time (and corresponding rise in morning and lunch times) around holidays such as Christmas, New Years, Independence day and Labor Day. It looks like the summer months also have a slightly later peak in the morning, perhaps because the school schedule allows for a later departure. There's a lot more variation, though, so it's hard say with a lot of precision.
+# 
+# These patterns are perhaps more clear when all the years are overlayed on each other:
 
 # In[ ]:
 
-get_ipython().magic(u'pinfo SpectralClustering')
+@z.curry
+def new_year(newyear, d):
+    "Given date object, return copy with same date, but year `newyear`"
+    (_, m, day) = d.timetuple()[:3]
+    return dt.date(newyear, m, day)
 
+
+plt.figure(figsize=(16, 6))
+for yr, yeardf_ in dfwkday.groupby('Year'):
+    yeardf = yeardf_.copy()
+    yeardf.index = yeardf.index.map(new_year(2000))  # Changing all years to 2000 for easier overlay
+    
+    am = get_peak(yeardf[['6', '7', '8', '9', '10']])
+    lunch = get_peak(yeardf[['10', '11', '12', '13', '14']])
+    pm = get_peak(yeardf[['14', '15', '16', '17', '18', '19']])
+    
+    plot_peak_smoothed(am)
+    plot_peak_smoothed(lunch)
+    plot_peak_smoothed(pm)
+rotate(75)
+
+
+# ## Dimensionality reduction and clustering
+
+# I was wanting to see how much the traffic volume for each day cluster, using the hourly volume as features. I had a hard time finding obvious clusters on the raw data, and took a detour and tried to visualize the daily volume. PCA didn't reveal anything that stood out to me, but running [TSNE](http://lvdmaaten.github.io/tsne/) revealed some interesting patterns
 
 # In[ ]:
 
@@ -177,12 +213,39 @@ X = Xdf
 
 # In[ ]:
 
-Xs = StandardScaler().fit_transform(X)
+# Xs = StandardScaler().fit_transform(X)
+
+
+# In[ ]:
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import DBSCAN, SpectralClustering, KMeans, spectral_clustering, AgglomerativeClustering
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 
 
 # In[ ]:
 
 get_ipython().run_cell_magic(u'time', u'', u"np.random.seed(3)\nts = TSNE(n_components=2)\nXt = ts.fit_transform(X)\nXdf_['T1'], Xdf_['T2'] = zip(*Xt)")
+
+
+# While much slower to run than PCA, TSNE is a popular way to reduce high-dimensional data into 2 or 3 dimensions for informative visualization. With our dataset, it does a good job of cramming the 24 features (traffic volume for each hour of the day) down into just 2 while preserving important characteristics of the data.
+# 
+# Here we see how well it spreads the data out, and seems to partition it into 4 natural clusters, compared to the lumpier PCA results which basically just leave us with 2 main clusters:
+
+# In[ ]:
+
+xpca = DataFrame(PCA(n_components=2).fit_transform(X), columns=['P1', 'P2'])
+
+plt.figure(figsize=(16, 5))
+plt.subplot(1,2,1)
+plt.title('TSNE')
+plt.scatter(Xdf_.T1, Xdf_.T2, alpha=.5, c="#3498db")
+
+plt.subplot(1,2,2)
+plt.title('PCA')
+plt.scatter(xpca.P1, xpca.P2, alpha=.5, c="#9b59b6")
+# Xdf_[["T1", "T2"]].plot(kind='scatter', x='T1', y='T2') 
 
 
 # clust_color = it.cycle(["#9b59b6", "#3498db", "#95a5a6", "#e74c3c", "#34495e", "#2ecc71"])
@@ -191,85 +254,94 @@ get_ipython().run_cell_magic(u'time', u'', u"np.random.seed(3)\nts = TSNE(n_comp
 # 
 # cp = dict(zip(clusts, sns.color_palette('Set2', n_colors=len(clusts))))
 # 
+# 
+#     # np.random.seed(3)
+#     # Xdf_['Dclusts'] = SpectralClustering(n_clusters=4, random_state=2,
+#     #             eigen_solver='arpack', assign_labels='discretize').fit_predict(Xt)
+#     # Xdf_['Dclusts'] = KMeans(n_clusters=4, random_state=5).fit_predict(Xt)
+# 
+#     # clusts = sorted(set(xdt))
+#     # cp = dict(zip(clusts, sns.color_palette('Set2', n_colors=len(clusts))))
+#     # Xdf_['Col'] = ccol = map(cp.get, xdt)
+
+# After not having much success clustering the raw data, the 2 TSNE dimensions looked like better candidates for clustering. Hierarchical clustering seemed to give pretty good results without much tuning:
 
 # In[ ]:
 
+Xdf_['Tclust'] = AgglomerativeClustering(n_clusters=4, linkage='average').fit_predict(Xt)
 
-
-
-# In[ ]:
-
-import sklearn
-sklearn.__version__
-
-
-# In[ ]:
-
-dbts = DBSCAN(eps=1.5)
-Xdf_['Tclust'] = dbts.fit_predict(Xt)
-# Xdf_['Dclusts'] = DBSCAN(eps=302).fit_predict(X)
-# Xdf_['Dclusts'] = DBSCAN(eps=302).fit_predict(X)
-
-
-
-# In[ ]:
-
-np.random.seed(3)
-# Xdf_['Dclusts'] = SpectralClustering(n_clusters=4, random_state=2, eigen_solver='arpack', assign_labels='discretize').fit_predict(Xt)
-Xdf_['Dclusts'] = AgglomerativeClustering(n_clusters=4, linkage='average').fit_predict(Xt)
-# Xdf_['Dclusts'] = KMeans(n_clusters=4, random_state=5).fit_predict(Xt)
-
-# clusts = sorted(set(xdt))
-# cp = dict(zip(clusts, sns.color_palette('Set2', n_colors=len(clusts))))
-# Xdf_['Col'] = ccol = map(cp.get, xdt)
-
-Xdf_.Dclusts.value_counts(normalize=0)
-
-
-# In[ ]:
-
+# Label each cluster by how many samples are in it
 Xdf_['Clust_size'] = Xdf_.Tclust.astype(str) + ': n=' + Xdf_.groupby('Tclust').Date.transform(len).map(str)
-Xdf_['Dclust_size'] = Xdf_.Dclusts.astype(str) + ': n=' + Xdf_.groupby('Dclusts').Date.transform(len).map(str)
 
 
 # In[ ]:
 
 sns.set(font_scale=1.5)
-# with sns.color_palette('Set2', Xdf_.Tclust.nunique()):
-with sns.color_palette('colorblind', Xdf_.Dclust_size.nunique()):
-    sns.lmplot("T1", "T2", data=Xdf_, hue='Dclust_size', fit_reg=False, size=8, aspect=2)
+with sns.color_palette('colorblind', Xdf_.Clust_size.nunique()):
+    sns.lmplot("T1", "T2", data=Xdf_, hue='Clust_size', fit_reg=False, size=8, aspect=2)
 plt.xlim(-20, 22)
 yo, yi = plt.ylim()
 
 
-# In[ ]:
-
-del Xdf_['Tclust']
-
-
-# In[ ]:
-
-sns.lmplot("T1", "T2", data=Xdf_.query('Dclusts == -1'), fit_reg=False, size=4, aspect=2)
-plt.xlim(-20, 22)
-plt.ylim(yo, yi);
-
-
-# In[ ]:
-
-sns.palplot(sns.color_palette('Set2', 10))
-
-
-# It looks like DBSCAN found 4 main clusters (0-3), and identified several smaller ones on the outskirts of these (4-8). 
+#     sns.lmplot("T1", "T2", data=Xdf_.query('Clust_size == -1'), fit_reg=False, size=4, aspect=2)
+#     plt.xlim(-20, 22)
+#     plt.ylim(yo, yi);
 # 
+#     sns.palplot(sns.color_palette('Set2', 10))
+# 
+#     sns.palplot(sns.color_palette('Set2', 10))
+# 
+#     Xdf_.groupby(['Month', 'Day_of_week', 'Tclust']).size().unstack().fillna(' ').T #.ix[adow]
 
-# Looking at the day of week distribution of the clusters should give a good first pass at dissecting what distinguishes them:
+# It looks like AgglomerativeClustering was able to find the 4 main clusters pretty well; looking at the day of week distribution of the clusters gave a good first pass at dissecting what distinguishes them:
 
 # In[ ]:
 
-Xdf_.groupby(['Tclust', 'Day_of_week']).size().unstack().fillna(' ')
+Xdf_.groupby(['Tclust', 'Day_of_week']).size().unstack().fillna(' ')[adow]
 
 
-# Clusters 1 and 0 look like they account pretty well for Saturday and Sunday, respectively. 
+# The clusters quite neatly decompose into day-of-the-week categories: Saturday (#3), Sunday (#1), Friday (#2) and the rest of the weekdays (#0). It could be useful to relabel according to the most common day in the cluster, and examine the outliers
+
+# In[ ]:
+
+Xdf_['Day_label'] = Xdf_.Tclust.map({0: 'Week', 1: 'Sun', 2: 'Fri', 3: 'Sat'})
+with sns.color_palette('colorblind', Xdf_.Day_label.nunique()):
+    sns.lmplot("T1", "T2", data=Xdf_, hue='Day_label', fit_reg=False, size=8, aspect=2)
+plt.xlim(-20, 22);
+
+
+# Of the possible pairings for the four main clusters, the Saturday and Sunday clusters look like they may be hardest to disambiguate. While they can be separated pretty easily on the first dimension, there's a huge amount of overlap in the second. While I don't know of any way to directly interpret TSNE results, it looks like T2 represents something predictive of weekend-ness.
+# 
+# 
+# Zooming in on the large weekday cluster, labelling with the *actual* day of the week shows an interesting density shift corresponding to the order of the day: the lower left is dominated by Mondays, which transitions to Tuesdays, followed by Wednesdays and ending with Fridays.
+
+# In[ ]:
+
+C0 = (Xdf_.query('Tclust == 0 & Day_of_week != "Fri"')
+      .assign(Daynum=lambda x: x.Day_of_week.map(dict(zip(dow, count()))))
+      .sort('Daynum'))
+with sns.color_palette('Paired', C0.Day_of_week.nunique()):
+    sns.lmplot("T1", "T2", data=C0, hue='Day_of_week', fit_reg=False,
+               size=8, aspect=2, hue_order=dow[:-1], scatter_kws=dict(s=70, alpha=.9))
+plt.xlim(-15, 15);
+
+
+# This ordered shift is more clear in a real density plot, particularly in the *T2* dimension
+
+# In[ ]:
+
+with sns.color_palette('Paired', C0.Day_of_week.nunique()):
+    g = sns.JointGrid("T1", "T2", C0, size=10)
+    for day, daydf in C0.groupby('Day_of_week', sort=False):
+        sns.kdeplot(daydf["T1"], ax=g.ax_marg_x, legend=False)
+        sns.kdeplot(daydf["T2"], ax=g.ax_marg_y, vertical=True, legend=False)
+        g.ax_joint.plot(daydf.T1, daydf.T2, "o", ms=5)
+    plt.legend(dow)
+
+
+#     sns.pairplot(vars=["T1", "T2"], data=C0, hue='Day_of_week', hue_order=dow[:-1], size=4, aspect=2, plot_kws=dict(s=70, alpha=.6))
+
+# 
 
 # In[ ]:
 
