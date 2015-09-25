@@ -1,6 +1,12 @@
 
 # coding: utf-8
 
+# # Visualizing daily traffic volume
+# 
+# As someone constantly looking for ways to waste less time in traffic, I'm always interested in what I can learn about Atlanta traffic patterns. After a bunch of searching, I finally found a way to access numerical traffic data at http://geocounts.com/gdot/, in the form of hourly vehicle counts for several years at different locations Georgia. While I would prefer a way to measure travel time trends, I figured it would be worthwhile to see what could be gleaned from volume measurements. 
+# 
+# In this post I take a shot at visualizing the volume trends (downloaded from the **load.ipynb** notebook) from a time-series and then clustering point of view using tools from the python data analysis stack. First for the imports and data loading...
+
 # In[ ]:
 
 get_ipython().run_cell_magic(u'javascript', u'', u"IPython.keyboard_manager.command_shortcuts.add_shortcut('Ctrl-k','ipython.move-selected-cell-up')\nIPython.keyboard_manager.command_shortcuts.add_shortcut('Ctrl-j','ipython.move-selected-cell-down')\nIPython.keyboard_manager.command_shortcuts.add_shortcut('Shift-m','ipython.merge-selected-cell-with-cell-after')")
@@ -10,16 +16,10 @@ get_ipython().run_cell_magic(u'javascript', u'', u"IPython.keyboard_manager.comm
 
 from __future__ import print_function, division
 from os.path import join, exists, dirname
-import os
-import re
-import errno
 from functools import partial
 from glob import glob
 import datetime as dt
-from dateutil import rrule
-from datetime import datetime, timedelta
 import calendar
-from collections import Counter
 from itertools import count
 from operator import methodcaller as mc
 
@@ -27,63 +27,16 @@ import pandas as pd
 from pandas import DataFrame, Series
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib as mpl
 import seaborn as sns
-# import requests
-# from bs4 import BeautifulSoup
 import toolz.curried as z
-import xlrd
 
+from traffic_utils import read, rotate, plot_minor
 
 pd.options.display.notebook_repr_html = False
-pd.options.display.width = 140
+pd.options.display.width = 120
 get_ipython().magic(u'matplotlib inline')
 sns.set_palette(sns.color_palette('colorblind', 5))
 
-
-# In[ ]:
-
-def drop_exc(df, cs):
-    if not hasattr(cs, '__iter__'):
-        cs = [cs]
-    cs = map(str, cs)
-    other_nums = [c for c in df if c.isdigit() and c not in cs]
-    return df[[c for c in df if c not in other_nums]]
-
-# drop_ex = partial(drop_exc, df=df0)
-def just_nums(df):
-    return [c for c in df if c.isdigit()]
-
-def rotate(deg=90):
-    locs, labels = plt.xticks()
-    plt.setp(labels, rotation=deg)
-#     plt.plot(x, delay)
-
-def read(site_loc, sheet=0):
-    fn = join('data', site_loc, 'all_{}.msg'.format(sheet))
-    exfile = glob(join('data', site_loc, '*.xlsx'))[0]
-    
-    xl_workbook = xlrd.open_workbook(exfile)
-    sheet_names = xl_workbook.sheet_names()
-    del xl_workbook
-
-    print('{} => {}'.format(sheet_names, sheet_names[sheet]))
-    with open(join('data', site_loc, 'description.txt')) as f:
-        print(f.read())
-        
-        df = pd.read_msgpack(fn)
-    print('Nulls: {} / {}'.format(df['2'].isnull().sum(), len(df)))
-    return df
-
-def plot_minor():
-    "Plot minor axis: http://stackoverflow.com/a/21924612/386279"
-    ax = plt.gca()
-    ax.get_xaxis().set_minor_locator(mpl.ticker.AutoMinorLocator())
-    ax.grid(b=True, which='major', color='w', linewidth=1.0)
-    ax.grid(b=True, which='minor', color='w', linewidth=0.5)
-
-
-# # Load
 
 # In[ ]:
 
@@ -92,13 +45,15 @@ adow = dow + ['Sat', 'Sun']
 hrs = map(str, range(24))
 
 
+# Of the several sensor sites that were available, I picked one that looked most complete (many had hours and even months missing). This data represents the north-bound traffic flow on Roswell Road.
+
 # In[ ]:
 
-# loc_id = '089-3572'
-# df0 = pd.read_msgpack('data/089-3572/all_0.msg')
-# dfnor = read('135-6287', sheet=1)
-dfnor = read('121-5114', sheet=1).assign(Date=lambda df: df.Date.map(mc('date')))
+dfnor = read('121-5114', sheet=1, verbose=0).assign(Date=lambda df: df.Date.map(mc('date')))
+dfnor[:2]
 
+
+# Each row of the data represents a day, and there are 24 numerical columns (0-23) representing the number of cars passing the point at the given hour. As a sample of what a week of data looks like, here is the [infamous last week of January 2014](http://news.yahoo.com/atlanta-s--snowpocalypse--turned-ordinary-commutes-into-chaos-and-confusion-174131033.html). Each line represents a separate day, and the $x$ and $y$ axes represent the hour and traffic counts, respectively. There is a general trend of high peaks around noon and 5pm (presumably for lunch and return from work time) and a smaller morning peak at around 9 (this is northbound and north of Atlanta while most traffic will be going down towards the city in the morning).
 
 # In[ ]:
 
@@ -151,6 +106,7 @@ plot_minor()
 
 # In[ ]:
 
+sns.set(font_scale=1.5)
 plt.figure(figsize=(20, 6))
 plot_peak_smoothed = lambda x: pd.rolling_mean(x, 5).plot()
 get_peak = lambda x: x.T.idxmax().dropna().map(int)
@@ -173,7 +129,7 @@ plot_minor()
 
 # The intuition that peak hour doesn't vary much looks largely correct. They look pretty constant throughout the year, though there appears to be a discernible dip in the peak afternoon time (and corresponding rise in morning and lunch times) around holidays such as Christmas, New Years, Independence day and Labor Day. It looks like the summer months also have a slightly later peak in the morning, perhaps because the school schedule allows for a later departure. There's a lot more variation, though, so it's hard say with a lot of precision.
 # 
-# These patterns are perhaps more clear when all the years are overlayed on each other:
+# These patterns are perhaps more clear with all the years overlaid on each other:
 
 # In[ ]:
 
@@ -205,23 +161,17 @@ rotate(75)
 
 # In[ ]:
 
-Xdf_ = dfnor.dropna(axis=0, how='any', subset=hrs).copy()  #.query('Weekday')
-Xdf_['Total'] = Xdf_[hrs].sum(axis=1)
-Xdf = Xdf_[hrs]  #.query('Weekday')
-X = Xdf
-
-
-# In[ ]:
-
-# Xs = StandardScaler().fit_transform(X)
-
-
-# In[ ]:
-
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import DBSCAN, SpectralClustering, KMeans, spectral_clustering, AgglomerativeClustering
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
+
+
+# In[ ]:
+
+Xdf_ = dfnor.dropna(axis=0, how='any', subset=hrs).copy()
+Xdf_['Total'] = Xdf_[hrs].sum(axis=1)
+X = Xdf_[hrs]
 
 
 # In[ ]:
@@ -244,27 +194,10 @@ plt.scatter(Xdf_.T1, Xdf_.T2, alpha=.5, c="#3498db")
 
 plt.subplot(1,2,2)
 plt.title('PCA')
-plt.scatter(xpca.P1, xpca.P2, alpha=.5, c="#9b59b6")
-# Xdf_[["T1", "T2"]].plot(kind='scatter', x='T1', y='T2') 
+plt.scatter(xpca.P1, xpca.P2, alpha=.5, c="#9b59b6");
 
 
-# clust_color = it.cycle(["#9b59b6", "#3498db", "#95a5a6", "#e74c3c", "#34495e", "#2ecc71"])
-# clust_color = dict(zip(set(xdt), clust_color))
-# ccol = map(clust_color.get, xdt)
-# 
-# cp = dict(zip(clusts, sns.color_palette('Set2', n_colors=len(clusts))))
-# 
-# 
-#     # np.random.seed(3)
-#     # Xdf_['Dclusts'] = SpectralClustering(n_clusters=4, random_state=2,
-#     #             eigen_solver='arpack', assign_labels='discretize').fit_predict(Xt)
-#     # Xdf_['Dclusts'] = KMeans(n_clusters=4, random_state=5).fit_predict(Xt)
-# 
-#     # clusts = sorted(set(xdt))
-#     # cp = dict(zip(clusts, sns.color_palette('Set2', n_colors=len(clusts))))
-#     # Xdf_['Col'] = ccol = map(cp.get, xdt)
-
-# After not having much success clustering the raw data, the 2 TSNE dimensions looked like better candidates for clustering. Hierarchical clustering seemed to give pretty good results without much tuning:
+# After not having much success clustering the raw data, the 2 TSNE dimensions looked like better candidates for clustering, and hierarchical clustering seemed to give pretty good results without much tuning:
 
 # In[ ]:
 
@@ -273,25 +206,11 @@ Xdf_['Tclust'] = AgglomerativeClustering(n_clusters=4, linkage='average').fit_pr
 # Label each cluster by how many samples are in it
 Xdf_['Clust_size'] = Xdf_.Tclust.astype(str) + ': n=' + Xdf_.groupby('Tclust').Date.transform(len).map(str)
 
-
-# In[ ]:
-
-sns.set(font_scale=1.5)
 with sns.color_palette('colorblind', Xdf_.Clust_size.nunique()):
     sns.lmplot("T1", "T2", data=Xdf_, hue='Clust_size', fit_reg=False, size=8, aspect=2)
 plt.xlim(-20, 22)
-yo, yi = plt.ylim()
+plt.title('Clustering in TSNE space');
 
-
-#     sns.lmplot("T1", "T2", data=Xdf_.query('Clust_size == -1'), fit_reg=False, size=4, aspect=2)
-#     plt.xlim(-20, 22)
-#     plt.ylim(yo, yi);
-# 
-#     sns.palplot(sns.color_palette('Set2', 10))
-# 
-#     sns.palplot(sns.color_palette('Set2', 10))
-# 
-#     Xdf_.groupby(['Month', 'Day_of_week', 'Tclust']).size().unstack().fillna(' ').T #.ix[adow]
 
 # It looks like AgglomerativeClustering was able to find the 4 main clusters pretty well; looking at the day of week distribution of the clusters gave a good first pass at dissecting what distinguishes them:
 
@@ -300,7 +219,56 @@ yo, yi = plt.ylim()
 Xdf_.groupby(['Tclust', 'Day_of_week']).size().unstack().fillna(' ')[adow]
 
 
-# The clusters quite neatly decompose into day-of-the-week categories: Saturday (#3), Sunday (#1), Friday (#2) and the rest of the weekdays (#0). It could be useful to relabel according to the most common day in the cluster, and examine the outliers
+# It looks like the clusters quite neatly decompose into day-of-the-week categories: Saturday (#3), Sunday (#1), Friday (#2) and the rest of the weekdays (#0). I was a little surprised that Fridays are so cleanly segregated from the rest of the weekdays, and initially reasoned from annecdotes that it must be less busy, as it seems colleagues tend to take them off more and traffic seems much lighter compared to the other 4 work days.
+# 
+# Just to verify I aggregated average counts by day and found that Fridays don't actually have a discernably higher average traffic flow from 2-7pm. Looking at the medians also didn't give any evidence it's just some outliers pulling up the average.
+
+# In[ ]:
+
+gohomehrs = hrs[14:20]
+rushhour_pm = Xdf_.query('Weekday')[gohomehrs + ['Day_of_week']].assign(Total=lambda x: x[gohomehrs].sum(axis=1))
+
+fig, [ax1, ax2] = plt.subplots(nrows=1, ncols=2, figsize=(17, 5))
+sns.barplot(x='Day_of_week', y='Total', data=rushhour_pm, ax=ax1);
+sns.barplot(x='Day_of_week', y='Total', data=rushhour_pm, estimator=np.median, ax=ax2);
+
+
+# But plotting a sample of Fridays and non-Fridays shows a bit of a nuanced diffence:
+
+# In[ ]:
+
+fig, [ax1, ax2] = plt.subplots(nrows=1, ncols=2, figsize=(17, 5))
+sampkwds = dict(n=30, random_state=1)
+pltkwds = dict(legend=False, alpha=.25)
+nofrisamp = dfnor.query('Weekday & Day_of_week != "Fri"').sample(**sampkwds)[hrs].T
+frisamp = dfnor.query('Day_of_week == "Fri"').sample(**sampkwds)[hrs].T
+
+nofrisamp.plot(ax=ax1, title='Mon-Thurs',**pltkwds)
+frisamp.plot(ax=ax2, title='Friday', **pltkwds);
+
+
+# A couple of major shape differences initially jumped out at me. While traffic drops to about 200 by midnight on work nights, it looks like it's about twice that on Friday nights, and the lull between lunch and 5pm is less pronounced on Fridays. Plotting aggregated median volume at 2pm and 11pm show that this seems to hold for the days not in these samples.
+
+# In[ ]:
+
+fig, [ax1, ax2] = plt.subplots(nrows=1, ncols=2, figsize=(17, 5))
+lull_night = Xdf_.query('Weekday')[['14', '23', 'Day_of_week']] #.assign(Total=lambda x: x['14'].sum(axis=1))
+
+sns.barplot(x='Day_of_week', y='14', data=lull_night, estimator=np.median, ax=ax1);
+sns.barplot(x='Day_of_week', y='23', data=lull_night, estimator=np.median, ax=ax2);
+
+
+# And just for kicks, I thought I'd reverse the hours and look at the normalized cumulative sum to see if anything stood out. Beyond the higher midnight volume, though, nothing really stood out.
+
+# In[ ]:
+
+fig, [ax1, ax2] = plt.subplots(nrows=1, ncols=2, figsize=(17, 5))
+
+nofrisamp[::-1].cumsum().apply(lambda x: x / x.max() * 100).plot(ax=ax1, title='Mon-Thurs',**pltkwds)
+frisamp[::-1].cumsum().apply(lambda x: x / x.max() * 100).plot(ax=ax2, title='Friday', **pltkwds);
+
+
+# Anyways, back to those clusters, it looked useful to relabel them according to the most common day in the cluster, and examine the outliers
 
 # In[ ]:
 
@@ -313,7 +281,7 @@ plt.xlim(-20, 22);
 # Of the possible pairings for the four main clusters, the Saturday and Sunday clusters look like they may be hardest to disambiguate. While they can be separated pretty easily on the first dimension, there's a huge amount of overlap in the second. While I don't know of any way to directly interpret TSNE results, it looks like T2 represents something predictive of weekend-ness.
 # 
 # 
-# Zooming in on the large weekday cluster, labelling with the *actual* day of the week shows an interesting density shift corresponding to the order of the day: the lower left is dominated by Mondays, which transitions to Tuesdays, followed by Wednesdays and ending with Fridays.
+# Zooming in on the large weekday cluster, labelling with the *actual* day of the week shows an interesting density shift corresponding to the order of the day: the lower left is dominated by Mondays, which transitions to Tuesdays, followed by Wednesdays and ending with Fridays (this trend can also be seen in the successively higher traffic volume at 2pm and 11pm in the median bar plots above).
 
 # In[ ]:
 
@@ -339,590 +307,35 @@ with sns.color_palette('Paired', C0.Day_of_week.nunique()):
     plt.legend(dow)
 
 
-#     sns.pairplot(vars=["T1", "T2"], data=C0, hue='Day_of_week', hue_order=dow[:-1], size=4, aspect=2, plot_kws=dict(s=70, alpha=.6))
-
+# ## Wrapup
+# 
 # 
 
 # In[ ]:
 
-for c, clustdf in Xdf_.set_index('Date').groupby('Tclust'):
-    1
 
 
-# In[ ]:
 
-Xdf_.groupby(['Tclust', 'Day_of_week']).size().unstack().fillna(0).apply(np.log)
 
 
-# In[ ]:
 
-sns.clustermap(Xdf_.groupby(['Clust_size', 'Day_of_week']).size().unstack().fillna(0), annot=True, linewidths=.5)
 
 
-# In[ ]:
 
-clustdf
 
 
-# In[ ]:
 
-get_ipython().magic(u'pinfo2 plot_days')
 
 
-# 
 
-# In[ ]:
 
-def plot_days2(i, k, dfgb, n, nrows=1, ncols=1, hrs=hrs):
-    print('nrows: {},ncols: {},i: {}'.format(nrows, ncols, i))
-    plt.subplot(nrows, ncols, i)
-    plt.title(k)
-    dfplt_ = dfgb[hrs][:10].T
-    for c in dfplt_:
-        plt.plot(dfplt_.index, dfplt_[c])
-    plt.legend(list(dfplt_), loc='best')
 
 
-# In[ ]:
 
 
 
 
-# In[ ]:
 
 
 
-
-# In[ ]:
-
-Xdf_.set_index('Date')
-
-
-# In[ ]:
-
-plt.figure(figsize=(20, 20))
-
-plotby(Xdf_.set_index('Date'), by='Clust_size', f=plot_days2, nrows=4, ncols=3);
-
-
-# In[ ]:
-
-def plot_months(i, month, dfgb, n, nrows=1, ncols=1):
-    plt.subplot(nrows, ncols, i)
-    plt.title(calendar.month_name[month])
-    dfplt_ = dfgb[hrs].T[10:20]
-    for c in dfplt_:
-        plt.plot(dfplt_.index, dfplt_[c])
-    plt.legend(list(dfplt_), loc='best')
-
-plt.figure(figsize=(20, 5))
-plotby(dfpeak, by='Month', f=plot_months, nrows=1, ncols=3);
-
-
-# In[ ]:
-
-# plt.subplot(nrows, ncols, i)
-# plt.title(calendar.month_name[month])
-dfgb = clustdf
-
-dfplt_ = dfgb[hrs].T #[10:20]
-for c in dfplt_:
-    plt.plot(dfplt_.index, dfplt_[c])
-plt.legend(list(dfplt_), loc='best')
-
-
-# In[ ]:
-
-clustdf
-
-
-# In[ ]:
-
-dd = clustdf[hrs].T
-dd.plot()
-
-
-# In[ ]:
-
-Xmeta = Xdf_.drop(just_nums(Xdf_), axis=1)
-
-
-# In[ ]:
-
-Xmeta.query('Tclust == -1')[:10]
-
-
-# In[ ]:
-
-Xmeta.query('Tclust == 5')[:10]
-
-
-# In[ ]:
-
-.query('Tclust == -1')[:10]
-
-
-# In[ ]:
-
-sns.
-
-
-# In[ ]:
-
-Xdf_[:2]
-
-
-# In[ ]:
-
-Xt
-
-
-# In[ ]:
-
-ccol
-
-
-# In[ ]:
-
-plt.figure(figsize=(16, 10))
-plt.scatter(*zip(*Xt), alpha=.75, color=ccol)
-plt.legend(clusts)
-
-
-# In[ ]:
-
-Xdf_.query('T1 < -10 & T2 < -5').Day_of_week.value_counts(normalize=0)
-
-
-# In[ ]:
-
-Xdf_.query('T1 < -10 & T2 < -5') #.Day_of_week.value_counts(normalize=0)
-
-
-# In[ ]:
-
-DataFrame(Xs)[:30].T.plot()
-
-
-# In[ ]:
-
-
-
-
-# In[ ]:
-
-ss[ss >= 0].value_counts(normalize=0).tolist()
-
-
-# In[ ]:
-
-def try_dbparam_(eps, X):
-    db = DBSCAN(eps=eps)
-    ks = db.fit_predict(X)
-    ss = Series(ks)
-    return ss[ss >= 0].nunique(), (ss < 0).sum(), (ss[ss >= 0].value_counts().tolist() + [0])[0]
-
-def try_dbparam(X, grids):
-    params = try_dbparam.params = {e: try_dbparam_(e, X) for e in grids}
-    sp = Series(params)
-    nz, z, biggest = zip(*sp)
-    mkseries = partial(Series, index=sp.index)
-    return Series(nz, index=sp.index), Series(z, index=sp.index), mkseries(biggest)
-
-
-# In[ ]:
-
-nz, z = zip(*sp)
-nz, z
-
-
-# In[ ]:
-
-sp = Series(try_dbparam.params)
-sp
-
-
-# In[ ]:
-
-try_dbparam.params
-
-
-# In[ ]:
-
-db = DBSCAN(eps=150)
-ks = db.fit_predict(X)
-ss = Series(ks)
-
-
-# In[ ]:
-
-ss.value_counts(normalize=0)
-
-
-# In[ ]:
-
-get_ipython().magic(u'time sparam, zparam, big = try_dbparam(135, 500, X)')
-
-
-# In[ ]:
-
-1.00000000e-001
-
-
-# In[ ]:
-
-np.logspace(-1, 2, 50)
-
-
-# In[ ]:
-
-zparams
-
-
-# In[ ]:
-
-# %time sparams, zparams, bigs = try_dbparam(Xs, np.logspace(0, 1, 50))
-get_ipython().magic(u'time sparams, zparams, bigs = try_dbparam(Xs, np.linspace(1, 2, 100))')
-
-
-# In[ ]:
-
-np.log10(3)
-
-
-# In[ ]:
-
-n1 = 1
-n = 620
-plt.figure(figsize=(16, 10))
-sparams[:n].plot()
-zparams[:n].plot()
-bigs[:n].plot()
-plot_minor()
-plt.legend(['Nclusters', 'None', 'Big'])
-
-
-# In[ ]:
-
-params
-
-
-# In[ ]:
-
-Series(params)
-
-
-# In[ ]:
-
-
-
-
-# In[ ]:
-
-plt.figure(figsize=(16, 10))
-sparams = Series(params)
-sparams[:350].plot()
-plot_minor()
-
-
-# In[ ]:
-
-sparams
-
-
-# In[ ]:
-
-db = DBSCAN(eps=300)
-ks = db.fit_predict(X)
-
-Series(ks).value_counts(normalize=0)
-
-
-# In[ ]:
-
-Xdf_[:2]
-
-
-# In[ ]:
-
-Xs
-
-
-# In[ ]:
-
-Data
-
-
-# In[ ]:
-
-dfnor[:2]
-
-
-# In[ ]:
-
-get_ipython().magic(u'pinfo StandardScaler')
-
-
-# In[ ]:
-
-ls
-
-
-# In[ ]:
-
-dfpeak.groupby('Month').plot()
-
-
-# In[ ]:
-
-g = sns.FacetGrid(dfpeak[just_nums(dfpeak)] + ['Month'], col='Month')
-g.map(plt.plot, figsize=(10, 5))
-
-
-# In[ ]:
-
-plot_peak(dfpeak)
-
-
-# In[ ]:
-
-dfpeak
-
-
-# In[ ]:
-
-df2 = dfnor[:].query('Weekday & Year == 2014 & Month > 2').set_index('Date').copy()
-hrs2 = df2[just_nums(df2)]
-hrs2[:5].T.plot(figsize=(20, 10))
-plot_minor()
-
-
-# In[ ]:
-
-# plt.figure(figsize=(16, 10))
-
-# hrs.iloc[range(21, 34)].T.plot(figsize=(20, 10))
-hrs2[:5].T.plot(figsize=(20, 10))
-
-ax = plt.gca()
-ax.get_xaxis().set_minor_locator(mpl.ticker.AutoMinorLocator())
-
-ax.grid(b=True, which='major', color='w', linewidth=1.0)
-ax.grid(b=True, which='minor', color='w', linewidth=0.5)
-
-
-# In[ ]:
-
-
-
-
-# In[ ]:
-
-
-
-
-# In[ ]:
-
-df6 = dfnor[:].query('Weekday & Year == 2014 & Month == 6').set_index('Date').copy()
-hrs6 = df6[just_nums(df6)]
-hrs6[:5].T.plot(figsize=(10, 5))
-
-plot_minor()
-
-
-# In[ ]:
-
-sns.axes_style()
-
-
-# In[ ]:
-
-weirds = [0, 20]
-
-
-# In[ ]:
-
-
-
-
-# In[ ]:
-
-
-
-
-# In[ ]:
-
-hrs.iloc[weirds + range(16,20)].T.plot(figsize=(20, 10))
-
-
-# In[ ]:
-
-df = drop_exc(df0[:], 7).query('Weekday').set_index('Date').copy()
-df['Week_avg'] = df.groupby('Week_of_year')['7'].transform('mean')
-df['Week_diff'] = df['7'] - df.Week_avg
-df[:2]
-
-
-# In[ ]:
-
-plt.figure(figsize=(16, 10))
-df.Week_diff.plot()
-df['7'].plot()
-
-
-# In[ ]:
-
-# pc3 = np.percentile(df['7'], 3)
-df[df['7'] < np.percentile(df['7'], 3)].reset_index().set_index(['Year', 'Day_of_year'])
-
-
-# In[ ]:
-
-from pandas.tseries.offsets import CustomBusinessDay
-from pandas.tseries.holiday import USFederalHolidayCalendar
-bday_us = CustomBusinessDay(calendar=USFederalHolidayCalendar())
-
-
-# In[ ]:
-
-bday_us.holidays
-
-
-# In[ ]:
-
-bday_us.holidays
-
-
-# In[ ]:
-
-df['7'].plot()
-
-
-# In[ ]:
-
-df.groupby('Day_of_week')[['Week_diff', '7']].agg(['mean', 'median']).ix[dow]
-
-
-# In[ ]:
-
-df.Day_of_week[:5].tolist()
-
-
-# In[ ]:
-
-sns
-
-
-# In[ ]:
-
-plt.figure(figsize=(16, 10))
-sns.violinplot(x='Day_of_week', y='Week_diff', data=df, )
-
-
-# In[ ]:
-
-df.groupby('Week_of_year')['7'].transform('mean')
-
-
-# In[ ]:
-
-# df0.query('Weekday').groupby(['Year', 'Day_of_year'])['7'].mean().plot()  # Day_of_week
-plt.figure(figsize=(16, 10))
-drop_exc(df0[:], 7).query('Weekday').groupby(['Date'])['7'].mean().plot()
-rotate(70)
-
-
-# In[ ]:
-
-get_ipython().system(u'cat data/135-6287/description.txt')
-
-
-# In[ ]:
-
-drop_exc(df0.query('Weekday'), 7)[-100:]
-
-
-# - peak hour
-
-# In[ ]:
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# In[ ]:
-
-
-
-
-# In[ ]:
-
-
-
-
-# In[ ]:
-
-
-
-
-# In[ ]:
-
-
-
-
-# In[ ]:
-
-
-
-
-# In[ ]:
-
-plt.plota
-
-
-# In[ ]:
-
-sheetnames = (u'Combined', u'Dir E', u'Dir W')
-
-
-# In[ ]:
-
-def check_sheetnames(dir):
-    dirglob = glob.glob(join(dir, '*.xlsx'))
-    snames = {tuple(xlrd.open_workbook(fn).sheet_names()) for fn in dirglob}
-    assert snames == {sheetnames}, "Different sheet names: {}".format(snames)
-
-
-# In[ ]:
-
-# check_sheetnames('data/121-5450')
-
-
-# In[ ]:
-
-def load_month(yr, mth):
-    
 
