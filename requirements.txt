@@ -1,9 +1,11 @@
-ipython[notebook]
+ipython[notebook]<4
 requests
 python-dateutil
 beautifulsoup4
 pandas
 numexpr
 seaborn
+scikit-learn
 openpyxl
 toolz
+xlrd
